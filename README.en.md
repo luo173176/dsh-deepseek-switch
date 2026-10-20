@@ -54,7 +54,7 @@ plugin_manager install_bundle target=github:luo173176/dsh-deepseek-switch
 npx -y @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile desktop add github:luo173176/dsh-deepseek-switch
 ```
 
-`dsh plugin --profile <name>` runs pnpm inside that profile. Installing the package is not enough — the bundle must also be selected in `dsh.profile.bundles`; use `plugin_manager` (`list_bundles` / `set_bundle`) or the plugin page in the app.
+`dsh plugin --profile <name>` runs pnpm inside that profile. Measured on 0.2.1-rc.2: installing into a fresh profile also selects the bundle (`dsh.profile.bundles` gains `dsh-deepseek-switch`), but the reserved `desktop` profile takes the plain-pnpm branch and does **not** select it — there you still enable it with `plugin_manager` (`list_bundles` / `set_bundle`) or the plugin page.
 
 ### C. Local development
 

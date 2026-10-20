@@ -58,7 +58,7 @@ plugin_manager install_bundle target=github:luo173176/dsh-deepseek-switch
 npx -y @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile desktop add github:luo173176/dsh-deepseek-switch
 ```
 
-`dsh plugin --profile <name>` 的语义是**在该 profile 目录里执行 pnpm**；装包之后还要让 bundle 进入 `dsh.profile.bundles`，在 Harness 里用 `plugin_manager`（`list_bundles` / `set_bundle`）或在插件页面点启用。
+`dsh plugin --profile <name>` 的语义是**在该 profile 目录里执行 pnpm**。实测（本机 0.2.1-rc.2）：装到一个新建 profile 时 bundle 会被自动选中（`dsh.profile.bundles` 出现 `dsh-deepseek-switch`）；但 **`desktop` 这个保留 profile 走的是纯 pnpm 分支，不会自动选中 bundle**，装完还需要在 Harness 里用 `plugin_manager`（`list_bundles` / `set_bundle`）或插件页面点启用。
 
 ### 方式 C：本地开发
 
