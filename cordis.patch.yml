@@ -1,0 +1,7 @@
+- insert:
+    - id: deepseek-switch
+      name: 'dsh-deepseek-switch'
+      config:
+        defaultMode: harness
+        autoRestore: true
+        chatUrl: 'https://chat.deepseek.com/'

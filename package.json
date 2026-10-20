@@ -1,0 +1,61 @@
+{
+  "name": "dsh-deepseek-switch",
+  "version": "0.5.0",
+  "description": "DeepSeek Switch for DeepSeek Harness: one window, two workspaces — the official chat.deepseek.com page in a persistent embedded WebView, and the Harness agent workspace.",
+  "type": "module",
+  "license": "MIT",
+  "author": "luo173176",
+  "homepage": "https://github.com/luo173176/dsh-deepseek-switch#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luo173176/dsh-deepseek-switch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/luo173176/dsh-deepseek-switch/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek",
+    "deepseek-harness",
+    "cordis",
+    "webview",
+    "chat"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "test": "node test/host.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

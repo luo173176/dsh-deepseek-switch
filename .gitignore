@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts and local tooling
+*.tgz
+*.asar
+*.asar.patched
+*.bak
+_probe/
+tools/app.asar.patched
+
+# Login snapshots and runtime state — never commit these
+session.json
+session.json.tmp
+state.json
+diag.ndjson
+*.session.json
+
+# Screenshots and scratch captures
+shot-*.png
+
+# Local env and editor files
+.env
+.env.local
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
