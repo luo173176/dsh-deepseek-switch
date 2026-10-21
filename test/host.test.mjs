@@ -129,7 +129,8 @@ const post = async (base, body, headers = {}) => {
   const server = await listen(mount())
   await post(server.base, { op: 'diag', entry: { stage: 'client-probe', note: 'hello' } })
   const lines = (await readFile(join(home, 'dsh-deepseek-switch', 'diag.ndjson'), 'utf8')).trim().split('\n')
-  const last = JSON.parse(lines[lines.length - 1])
+  /* Other stages (apply, registration) are appended around it; find the reported one. */
+  const last = lines.map((line) => JSON.parse(line)).find((entry) => entry.stage === 'client-probe')
   assert.equal(last.stage, 'client-probe')
   assert.equal(last.source, 'client')
   assert.equal(last.note, 'hello')
@@ -291,5 +292,78 @@ const deepseekCookie = { name: 'ds_session', value: 'SECRET-VALUE', domain: '.de
   console.log('ok 12 - only guest partitions are touched and the ledger holds no credential')
 }
 
+// 13. A profile that registered this package twice keeps one record, and the duplicate goes.
+{
+  const { deduplicateRegistration } = await import('../index.js')
+  const { mkdir, symlink, writeFile, readdir } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'dss-reg-'))
+  const own = join(root, 'own-package')
+  const profile = join(root, 'profile')
+  const modules = join(profile, 'node_modules')
+  const other = join(modules, 'other-plugin')
+  await mkdir(own, { recursive: true })
+  await mkdir(join(modules, '@local'), { recursive: true })
+  await mkdir(other, { recursive: true })
+  await writeFile(join(own, 'package.json'), JSON.stringify({ name: 'dsh-deepseek-switch', version: '0.6.0' }))
+  await writeFile(join(other, 'package.json'), JSON.stringify({ name: 'other-plugin' }))
+  const manifestPath = join(profile, 'package.json')
+  await writeFile(manifestPath, JSON.stringify({
+    name: 'desktop-profile',
+    dependencies: {
+      'dsh-deepseek-switch': `link:${own}`,
+      '@local/dsh-deepseek-switch': `link:${own}`,
+      'other-plugin': `link:${other}`,
+      '@local/other-plugin': `link:${other}`,
+    },
+    dsh: { profile: { bundles: ['dsh-deepseek-switch', '@local/dsh-deepseek-switch', 'other-plugin', '@local/other-plugin'] } },
+  }, null, 2))
+  await symlink(own, join(modules, 'dsh-deepseek-switch'), 'junction')
+  await symlink(own, join(modules, '@local', 'dsh-deepseek-switch'), 'junction')
+  await symlink(other, join(modules, '@local', 'other-plugin'), 'junction')
+
+  const outcome = await deduplicateRegistration({ manifestPath, ownDir: own })
+  assert.equal(outcome.changed, true)
+  assert.deepEqual(outcome.removed, ['@local/dsh-deepseek-switch'], 'only this package\'s alias is removed')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  assert.equal(manifest.dependencies['@local/dsh-deepseek-switch'], undefined)
+  assert.equal(manifest.dependencies['dsh-deepseek-switch'], `link:${own}`, 'the canonical name is kept')
+  assert.equal(manifest.dependencies['@local/other-plugin'], `link:${other}`, 'another plugin is untouched')
+  assert.deepEqual(manifest.dsh.profile.bundles, ['dsh-deepseek-switch', 'other-plugin', '@local/other-plugin'])
+  assert.ok((await readdir(profile)).some((name) => name.startsWith('package.json.bak-')), 'the original is kept')
+  await assert.rejects(readdir(join(modules, '@local', 'dsh-deepseek-switch')), 'the stale link is gone')
+
+  // 14. Running the same repair again changes nothing.
+  const again = await deduplicateRegistration({ manifestPath, ownDir: own })
+  assert.equal(again.changed, false)
+  assert.deepEqual(again.removed, [])
+  await rm(root, { recursive: true, force: true })
+  console.log('ok 13 - a duplicate registration of this package is collapsed, other plugins kept')
+  console.log('ok 14 - the repair is idempotent')
+}
+
+// 15. A profile with nothing registered twice is left byte for byte alone.
+{
+  const { deduplicateRegistration } = await import('../index.js')
+  const { mkdir, writeFile } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'dss-reg-clean-'))
+  const own = join(root, 'own-package')
+  const profile = join(root, 'profile')
+  await mkdir(own, { recursive: true })
+  await mkdir(join(profile, 'node_modules'), { recursive: true })
+  await writeFile(join(own, 'package.json'), JSON.stringify({ name: 'dsh-deepseek-switch' }))
+  const manifestPath = join(profile, 'package.json')
+  const original = JSON.stringify({ name: 'p', dependencies: { other: 'link:/nowhere' }, dsh: { profile: { bundles: ['other'] } } }, null, 2)
+  await writeFile(manifestPath, original)
+  const outcome = await deduplicateRegistration({ manifestPath, ownDir: own })
+  assert.equal(outcome.changed, false)
+  assert.equal(await readFile(manifestPath, 'utf8'), original, 'an untouched profile keeps its exact bytes')
+  // 16. An unreadable manifest is a no-op, not a crash.
+  const missing = await deduplicateRegistration({ manifestPath: join(profile, 'nope.json'), ownDir: own })
+  assert.equal(missing.changed, false)
+  await rm(root, { recursive: true, force: true })
+  console.log('ok 15 - a clean profile is not rewritten')
+  console.log('ok 16 - a missing manifest is a no-op')
+}
+
 await rm(home, { recursive: true, force: true })
-console.log('\n12/12 host-half checks passed')
+console.log('\n16/16 host-half checks passed')

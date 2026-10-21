@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## 0.6.0 — 2026-10-21
+
+A profile that registered this package twice no longer breaks plugin updates, and the Chat page can be reloaded without restarting the app.
+
+- **Fixed** duplicate loader entry (`@local/dsh-deepseek-switch: duplicate loader entry id "deepseek-switch" (2 rows)`) caused by two bundle names resolving to the same directory. The host half now runs `deduplicateRegistration()` on `apply`: only entries whose `node_modules/<name>` resolves to this package's own directory are touched, the canonical name is kept, `package.json` is backed up (`package.json.bak-<timestamp>`) and written atomically, the stale `node_modules/@local/...` link is removed, and a clean profile is left byte for byte alone (idempotent). The outcome lands in `diag.ndjson` as `{stage:"registration", …}` and in `session-state`.
+- **Fixed** the plugin list showing two `DeepSeek Switch` rows — it reads the same bundle list, so collapsing the registration collapses the row. Nothing is hidden or filtered.
+- **Added** a refresh button in the Chat toolbar (⟳, tooltip 刷新 Chat / Refresh Chat): `reload()` on the existing `<webview>`, same partition and instance, so cookies, `localStorage` and the login survive; Harness is untouched; `refreshing` de-duplicates repeat clicks and ends on `did-stop-loading` / `did-fail-load` / `destroyed`; no cookie, storage or snapshot is cleared before or after.
+- **Added** tests 13–16: duplicate registration collapsed while other plugins stay untouched, idempotent re-run, clean profile byte-identical, missing manifest is a no-op (16/16).
+- **Changed** the README with the two mechanisms above and their limits (a page reload does not make the official service propagate a change from another device sooner).
+
 ## 0.5.0 — 2026-10-20
 
 Login state now survives a full application restart, and the project is published.

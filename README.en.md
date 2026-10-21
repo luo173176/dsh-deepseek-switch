@@ -83,7 +83,18 @@ plugin_manager list_bundles     # the bundle is listed
 | `Alt+1` | Same |
 | `Alt+2` | Back to the Harness panel you came from |
 | Click `Chat` again | Back to Harness (the row toggles) |
+| ⟳ in the Chat toolbar | Reload the official page only (see below) |
 | Sidebar *New Chat* | Native Harness session, unrelated to this plugin |
+
+### Refreshing the Chat page
+
+A session created elsewhere (phone, another browser) is not picked up on its own. The ⟳ button in the Chat toolbar reloads the official page:
+
+- it calls `reload()` on this `<webview>` — same partition, same instance, same page context, so cookies and `localStorage` stay put and **you stay signed in**;
+- only Chat is affected; Harness sessions, panels and running tasks are untouched, and no second window or instance is created;
+- while loading the button is disabled and spins, and repeat clicks are ignored by the `refreshing` state machine; loading ends on `did-stop-loading` / `did-fail-load` / `destroyed`;
+- nothing is cleared: no cookie wipe, no storage wipe, no snapshot deletion. The usual gated save still runs afterwards, so a signed-out blank page cannot overwrite a good snapshot;
+- it guarantees the page fetched fresh data, **not** that the official service has already propagated a change made on another device — the plugin never claims "synced".
 
 ## How login persistence works
 
@@ -114,6 +125,23 @@ Security: the snapshot stays in the current user's home directory, is never uplo
 4. **Site risk control is not bypassed**: CAPTCHAs or environment checks may appear inside any embedded browser.
 5. **Chat history is not shared**: web history stays on the web, Harness sessions stay in Harness.
 6. **Offline / site markup changes**: the failure card offers retry, open in browser, and back to Harness.
+7. **The refresh button only reloads the page**: it makes the embedded page fetch fresh data, but does not change how fast the official service propagates changes made on another device; the plugin never claims "synced".
+
+## Registered once (duplicate loader entries)
+
+**Symptom.** Updating another plugin fails with
+
+```
+@local/dsh-deepseek-switch: duplicate loader entry id "deepseek-switch" (2 rows)
+```
+
+and the plugin list shows two `DeepSeek Switch` rows.
+
+**Cause: a second registration of the same directory left in the profile.** The package used to be installed as `@local/dsh-deepseek-switch`; after the rename to `dsh-deepseek-switch` both names stayed in `dependencies` and in `dsh.profile.bundles`, both `link:`-ing to the same directory. Every `dsh.profile.bundles` entry becomes one layer (`buildBundleLayers` in `dshmarket/src/check.ts`), both layers expand the same `cordis.patch.yml`, and its single `- id: deepseek-switch` row ends up claimed twice. `remove_bundle` refuses the running `@local/...` entry, so a restart does not heal it.
+
+**Fix.** The host half runs `deduplicateRegistration()` on every `apply`: it keeps only the entry whose `node_modules/<name>` resolves (via `realpath`) to this package's own directory, deletes the rest from `dependencies` and `dsh.profile.bundles`, copies `package.json.bak-<timestamp>` first, writes atomically (`.tmp` + `rename`), removes the stale `node_modules/@local/...` link, touches nothing that resolves elsewhere, writes no file when the profile is already clean (idempotent), and records `{stage:"registration", changed, kept, removed, backup}` in `diag.ndjson`.
+
+Measured on a real desktop profile: `changed:true, removed:["@local/dsh-deepseek-switch"]`, and a second run returns `changed:false`. Nothing is hidden or filtered from the list — the second row is gone because the second registration is gone.
 
 ## Troubleshooting
 
@@ -124,6 +152,8 @@ Security: the snapshot stays in the current user's home directory, is never uplo
 | Blank Chat area | Check `guest-attached` and `did-fail-load` in `diag.ndjson`; use retry / open in browser |
 | Login lost after restart | `client-boot`'s `snapshot` and `session-restore`'s `storage` count; `0` means the snapshot was never written or the page was not signed in |
 | Duplicate title on top | This plugin draws no titlebar; another overlay plugin is stacking on top |
+| A session created elsewhere is missing | Press ⟳ in the Chat toolbar; a `chat-refresh` line in `diag.ndjson` means it was issued |
+| `duplicate loader entry id "deepseek-switch"` | See the section above; the `registration` line reports what was removed |
 
 ## Development
 

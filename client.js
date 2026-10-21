@@ -49,6 +49,8 @@ window.__ModuleLoader__.load({
       persists: true,
       phase: 'idle',
       error: '',
+      /* A manual reload is in flight: the toolbar button is disabled until it settles. */
+      refreshing: false,
       /* Login persistence diagnostics, shown nowhere by default: they only reach diag.ndjson. */
       session: { electron: 'unknown', savedAt: '', cookies: 0 },
     }
@@ -121,6 +123,36 @@ window.__ModuleLoader__.load({
         }
       } catch (error) {
         patch({ phase: 'error', error: text(error) })
+      }
+    }
+
+    /**
+     * Reload the Chat guest in place — the same element, the same partition, the same
+     * cookies. Only the document is fetched again, which is what makes conversations
+     * created in another tab of the official site show up without restarting Harness.
+     *
+     * Nothing is cleared before the reload: the login lives in this partition and in the
+     * snapshot file, and both stay exactly as they are. `refreshing` holds until the load
+     * settles, so a second click cannot stack a second navigation.
+     */
+    function refreshChat() {
+      const record = guest
+      if (record === undefined || !record.element.isConnected) {
+        void ensureGuest(hostElement)
+        return
+      }
+      if (state.refreshing) return
+      if (!onChatOrigin(record.element)) {
+        /* Never navigated (or stuck off-origin): a plain load is the refresh. */
+        loadChatPage(record.element)
+        return
+      }
+      patch({ refreshing: true, phase: 'loading', error: '' })
+      report('chat-refresh', { partition: record.partition.slice(0, 22) })
+      try {
+        record.element.reload()
+      } catch (error) {
+        patch({ phase: 'error', error: text(error), refreshing: false })
       }
     }
 
@@ -338,16 +370,17 @@ window.__ModuleLoader__.load({
             void saveSession(true, record)
           })
           element.addEventListener('did-stop-loading', () => {
+            if (state.refreshing) patch({ refreshing: false })
             if (state.phase !== 'error') patch({ phase: 'ready' })
           })
           element.addEventListener('did-fail-load', (event) => {
             if (!event.isMainFrame || event.errorCode === -3) return
-            patch({ phase: 'error', error: (event.errorDescription || 'load failed') + ' (' + event.errorCode + ')' })
+            patch({ phase: 'error', error: (event.errorDescription || 'load failed') + ' (' + event.errorCode + ')', refreshing: false })
           })
           element.addEventListener('destroyed', () => {
             stopSessionTimers(record)
             guest = undefined
-            patch({ phase: 'error', error: '网页进程已退出' })
+            patch({ phase: 'error', error: '网页进程已退出', refreshing: false })
           })
           /* Reply links pop windows through the lease-scoped native bridge; the shell opens
              http(s) targets in the system browser. */
@@ -403,6 +436,15 @@ window.__ModuleLoader__.load({
 .dsx-btn:hover { background: var(--dsw-alias-bg-overlay); }
 .dsx-btn[data-primary="1"] { color: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); }
 .dsx-glyph { display: inline-flex; align-items: center; justify-content: center; color: inherit; }
+.dsx-tools { position: absolute; top: 8px; right: 14px; z-index: 3; display: flex; gap: 6px; }
+.dsx-icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border-radius: 8px; cursor: pointer; opacity: .78;
+  color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); }
+.dsx-icon-btn:hover { opacity: 1; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
+.dsx-icon-btn[data-busy="1"] { cursor: default; }
+.dsx-icon-btn[data-busy="1"] svg { animation: dsx-spin .9s linear infinite; }
+@keyframes dsx-spin { to { transform: rotate(360deg) } }
 `
 
     /* ------------------------------------------------------------- components */
@@ -595,6 +637,39 @@ window.__ModuleLoader__.load({
                 ),
               )
             : null,
+        ),
+        h(
+          'div',
+          { className: 'dsx-tools' },
+          h(
+            'button',
+            {
+              className: 'dsx-icon-btn',
+              type: 'button',
+              title: snapshot.refreshing ? '正在刷新 Chat…' : '刷新 Chat（重新加载官方页面）',
+              'aria-label': '刷新 Chat',
+              'data-busy': snapshot.refreshing ? '1' : '0',
+              ...(snapshot.refreshing ? { disabled: true } : null),
+              onClick: refreshChat,
+            },
+            h(
+              'svg',
+              { width: 15, height: 15, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
+              h('path', {
+                d: 'M13.3 6.4A5.5 5.5 0 1 0 13.4 9.4',
+                stroke: 'currentColor',
+                'stroke-width': '1.4',
+                'stroke-linecap': 'round',
+              }),
+              h('path', {
+                d: 'M13.5 2.8v3.7h-3.7',
+                stroke: 'currentColor',
+                'stroke-width': '1.4',
+                'stroke-linecap': 'round',
+                'stroke-linejoin': 'round',
+              }),
+            ),
+          ),
         ),
       )
     }

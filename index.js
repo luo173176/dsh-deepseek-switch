@@ -21,10 +21,11 @@
  * Electron-session snapshot, the restore-before-navigate order, the empty-page
  * autosave guard and the WAF filtering all come from there. See README §10.
  */
-import { mkdir, readFile, rename, writeFile, appendFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile, appendFile, copyFile, realpath, rm, rmdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 const ROUTE = '/dsh-deepseek-switch/rpc'
 /* Generous because a session save carries the page's localStorage; still bounded. */
@@ -217,6 +218,112 @@ export async function restoreCookies(cookies, snapshot) {
   return restored
 }
 
+/* ------------------------------------------------------- registration hygiene */
+
+/**
+ * The profile manifest this process runs from: `$DSH_HOME/profiles/<profile>/package.json`,
+ * where `<profile>` is what the launcher exported as `DSH_PROFILE` (the desktop app uses
+ * `desktop`).
+ */
+export function profileManifestPath(env = process.env) {
+  const raw = env.DSH_PROFILE
+  const profile = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'desktop'
+  return join(dshHome(env), 'profiles', profile, 'package.json')
+}
+
+async function resolvesTo(directory, target) {
+  try {
+    return (await realpath(directory)) === (await realpath(target))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Collapse a duplicate registration of THIS package in one profile manifest.
+ *
+ * Why this exists: a bundle is recorded in the profile by package name, so installing from a
+ * directory *before* the package was renamed left the profile holding both names
+ * (`@local/dsh-deepseek-switch` and `dsh-deepseek-switch`) pointing at the same directory.
+ * The bundle list is what the loader composes, so one directory was composed twice, both
+ * copies declared the same `- id: deepseek-switch`, and every composition check failed with
+ * `duplicate loader entry id "deepseek-switch" (2 rows)` — which rolled back unrelated
+ * plugin updates and listed this plugin twice.
+ *
+ * Safety: an entry is removed only when the directory it installs from resolves to *this*
+ * package's own directory, so another plugin's record can never be touched, and the
+ * canonical name (this package's own `name`) is always kept. A second run is a no-op, the
+ * original manifest is kept beside it as `package.json.bak-<timestamp>`, and the write is a
+ * temp file plus rename so a crash cannot leave a half-written profile.
+ */
+export async function deduplicateRegistration({ manifestPath, ownDir } = {}) {
+  const outcome = { changed: false, kept: '', removed: [], backup: '', error: '' }
+  if (typeof manifestPath !== 'string' || manifestPath === '' || typeof ownDir !== 'string' || ownDir === '') {
+    return { ...outcome, error: 'missing-arguments' }
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  } catch {
+    return outcome
+  }
+  if (manifest === null || typeof manifest !== 'object') return outcome
+  let ownName = ''
+  try {
+    ownName = String(JSON.parse(await readFile(join(ownDir, 'package.json'), 'utf8')).name || '')
+  } catch {
+    return { ...outcome, error: 'own-name-unreadable' }
+  }
+  if (ownName === '') return { ...outcome, error: 'own-name-missing' }
+
+  const dependencies = manifest.dependencies !== null && typeof manifest.dependencies === 'object' && !Array.isArray(manifest.dependencies)
+    ? manifest.dependencies
+    : {}
+  const declared = manifest.dsh !== null && typeof manifest.dsh === 'object'
+    && manifest.dsh.profile !== null && typeof manifest.dsh.profile === 'object'
+    && Array.isArray(manifest.dsh.profile.bundles)
+    ? manifest.dsh.profile.bundles
+    : []
+  const bundles = declared.filter((name) => typeof name === 'string')
+  const profileDirectory = dirname(manifestPath)
+
+  const names = new Set([...Object.keys(dependencies), ...bundles])
+  const duplicate = []
+  for (const name of names) {
+    if (name === ownName) continue
+    if (await resolvesTo(join(profileDirectory, 'node_modules', name), ownDir)) duplicate.push(name)
+  }
+  outcome.kept = ownName
+  if (duplicate.length === 0) return outcome
+
+  const backup = `${manifestPath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  try {
+    await copyFile(manifestPath, backup)
+  } catch {
+    return { ...outcome, error: 'backup-failed' }
+  }
+  for (const name of duplicate) {
+    delete dependencies[name]
+    for (let index = declared.length - 1; index >= 0; index -= 1) {
+      if (declared[index] === name) declared.splice(index, 1)
+    }
+    await rm(join(profileDirectory, 'node_modules', name), { recursive: true, force: true })
+  }
+  try {
+    await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+    await rename(`${manifestPath}.tmp`, manifestPath)
+  } catch {
+    return { ...outcome, error: 'write-failed', backup }
+  }
+  try {
+    /* Only the alias scope this duplicate lived in; a non-empty scope stays. */
+    await rmdir(join(profileDirectory, 'node_modules', '@local'))
+  } catch {
+    // Still holds other packages: leave it alone.
+  }
+  return { changed: true, kept: ownName, removed: duplicate, backup, error: '' }
+}
+
 /* --------------------------------------------------------------------- apply */
 
 /**
@@ -249,6 +356,9 @@ export function apply(ctx, config = {}) {
     updatedAt: 0,
     persisted: false,
   }
+
+  /* Outcome of the profile-registration check, reported through the state view. */
+  const registration = { checked: false, changed: false, kept: '', removed: [], error: '' }
 
   const ready = (async () => {
     try {
@@ -303,6 +413,7 @@ export function apply(ctx, config = {}) {
     saveIntervalMs: settings.saveIntervalMs,
     stateFile,
     session: sessionView(snapshot),
+    registration,
   })
 
   const json = (res, code, value) => {
@@ -479,6 +590,22 @@ export function apply(ctx, config = {}) {
     () => webServer.register({ kind: 'exact', path: ROUTE, handler }),
     'deepseek-switch:rpc',
   )
+  /* One idempotent pass over the profile's own registration records, so a leftover alias of
+     this same package cannot keep composing twice (see deduplicateRegistration). Runs after
+     the route exists, never blocks the server, and reports through diag + the state view. */
+  void ready
+    .then(() => deduplicateRegistration({
+      manifestPath: profileManifestPath(),
+      ownDir: dirname(fileURLToPath(import.meta.url)),
+    }))
+    .then(async (outcome) => {
+      Object.assign(registration, { checked: true }, outcome)
+      await diag({ stage: 'registration', ...outcome })
+    })
+    .catch((error) => {
+      registration.error = text(error)
+    })
+
   void electronProbe().then((status) => diag({
     stage: 'apply',
     route: ROUTE,

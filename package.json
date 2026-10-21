@@ -1,6 +1,6 @@
 {
   "name": "dsh-deepseek-switch",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Switch for DeepSeek Harness: one window, two workspaces — the official chat.deepseek.com page in a persistent embedded WebView, and the Harness agent workspace.",
   "type": "module",
   "license": "MIT",
