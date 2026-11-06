@@ -86,6 +86,12 @@ plugin_manager list_bundles     # the bundle is listed
 | ⟳ in the Chat toolbar | Reload the official page only (see below) |
 | Sidebar *New Chat* | Native Harness session, unrelated to this plugin |
 
+### How the Chat overlay follows the centre column
+
+Chat is not a separate window: it is a layer over the Harness frame, so it has to know exactly where the middle column is and how wide it is. That frame is a three-track grid — `sidebar | centre | right panel` — and the tracks animate (`grid-template-columns` has a CSS transition) whenever a side panel opens or closes.
+
+Before 0.6.1 the layer measured that property once per change, so a sample taken mid-transition could stick forever: the official page stayed about 600 px wide with a blank band on the right. Now it measures the centre column's own box (`getBoundingClientRect`), sets `--dsx-left/right/top` from the four edges relative to the frame, re-samples across the whole 650 ms settle window, and measures again every time Chat is shown. Right panel open → Chat sits to its left; right panel closed → Chat fills the frame; left sidebar collapsed → zero offset. `test/geometry.test.mjs` pins the rule (5 checks).
+
 ### Refreshing the Chat page
 
 A session created elsewhere (phone, another browser) is not picked up on its own. The ⟳ button in the Chat toolbar reloads the official page:
