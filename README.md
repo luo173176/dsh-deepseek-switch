@@ -92,6 +92,12 @@ plugin_manager list_bundles     # bundles 里应有 dsh-deepseek-switch
 | Chat 右上角 ⟳ | 只重新加载官方页面（见下） |
 | 侧边栏 `新会话` | Harness 原生新建会话，与本插件无关 |
 
+### Chat 覆盖层跟着中心列走
+
+Chat 不是一个独立窗口，而是覆盖在 Harness 主框架上的一层，所以它必须准确知道"中间那一列"在哪、有多宽。Harness 的布局是 `侧边栏 | 中间列 | 右侧栏` 三轨栅格，右侧栏开合时 `grid-template-columns` 带 CSS 过渡（不是瞬间切换）。0.6.1 之前这里只量一次就锁死，量到过渡中间值就会让 Chat 保持约 600px 宽、右边留一条空白。
+
+现在的规则：直接量中间列元素的盒子（`getBoundingClientRect`），取它相对 frame 的四条边作为 `--dsx-left/right/top`；在过渡开始/结束、窗口尺寸变化、以及每次 Chat 重新显示时都重测，并在 650ms 内补采几次。结果就是：右侧栏开着，Chat 在它左边；右侧栏关掉，Chat 立刻铺满；左侧栏收起，偏移为 0。这条规则由 `test/geometry.test.mjs` 锁定（5 项）。
+
 ### 刷新 Chat 页面
 
 在别处（手机、另一个浏览器）新建了会话，嵌入页不会自己知道。点 Chat 右上角的 ⟳ 按钮即可重新加载官方页面：

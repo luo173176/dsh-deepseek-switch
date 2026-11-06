@@ -1,6 +1,6 @@
 {
   "name": "dsh-deepseek-switch",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "DeepSeek Switch for DeepSeek Harness: one window, two workspaces — the official chat.deepseek.com page in a persistent embedded WebView, and the Harness agent workspace.",
   "type": "module",
   "license": "MIT",
@@ -46,7 +46,7 @@
   ],
   "scripts": {
     "check": "node --check index.js && node --check client.js",
-    "test": "node test/host.test.mjs"
+    "test": "node test/host.test.mjs && node test/geometry.test.mjs"
   },
   "dsh": {
     "bundle": {

@@ -408,6 +408,46 @@ window.__ModuleLoader__.load({
       return acquiring
     }
 
+    /**
+     * Offsets of the app frame's centre column, relative to the frame's padding box. The overlay
+     * covers the frame, so these four numbers are the only part of it a workspace may occupy:
+     * the left sidebar, the right panel and the native titlebar band are all excluded.
+     */
+    function frameOffsets(frame) {
+      const frameRect = frame.getBoundingClientRect()
+      let centreCol
+      for (const child of Array.from(frame.children)) {
+        if (String(child.className || '').indexOf('centerCol') >= 0) {
+          centreCol = child
+          break
+        }
+      }
+      if (centreCol) {
+        const rect = centreCol.getBoundingClientRect()
+        return {
+          left: Math.max(0, Math.round(rect.left - frameRect.left)),
+          right: Math.max(0, Math.round(frameRect.right - rect.right)),
+          top: Math.max(0, Math.round(rect.top - frameRect.top)),
+          source: 'centre',
+          raw: '',
+        }
+      }
+      /* Ceiling: a frame without the shipped centre column falls back to track maths.
+         Upgrade path: drop the fallback once the column marker is part of the public UI. */
+      const computed = getComputedStyle(frame)
+      const tracks = computed.gridTemplateColumns
+        .split(' ')
+        .map((value) => parseFloat(value))
+        .filter((value) => Number.isFinite(value))
+      return {
+        left: tracks[0] || 0,
+        right: tracks.length > 2 ? tracks.slice(2).reduce((sum, value) => sum + value, 0) : 0,
+        top: parseFloat(computed.paddingTop) || 0,
+        source: 'tracks',
+        raw: computed.gridTemplateColumns.slice(0, 120),
+      }
+    }
+
     /* -------------------------------------------------------------------- css */
 
     const CSS = `
@@ -522,84 +562,88 @@ window.__ModuleLoader__.load({
       }, [activePanelId])
 
       React.useEffect(() => {
-        /* ponytail: the frame is a `sidebar | main | rightbar` grid, so its computed column
-           tracks ARE the columns we must not cover. Ceiling: a frame that stops being a grid
-           leaves the surface full-bleed. Upgrade path: a layout-service geometry API, if one
-           ever appears. Observed instead of only listening to resize, because collapsing the
-           sidebar changes the tracks without a window resize. */
+        /* The overlay's containing block is the app frame: a three-track
+           `sidebar | centre | rightbar` grid whose right track animates open/closed. Follow the
+           CENTRE COLUMN's measured box instead of re-parsing grid tracks: the box is what the
+           user actually sees, and it stays right while the track transition runs. */
         const centre = root.current
         if (!centre) return
-        let frame
         let raf = 0
-        let reported = false
-        const frameOf = () => {
-          /* The overlay host sits somewhere under the layout frame; find the nearest grid
-             ancestor instead of assuming a fixed depth (the slot renderer may wrap entries). */
+        let reportTimer = 0
+        let lastKey = ''
+        const timers = []
+        const clearTimers = () => {
+          while (timers.length) clearTimeout(timers.pop())
+        }
+        const gridOf = () => {
           let node = centre.parentElement
-          let top = 0
-          let grid
           while (node && node !== document.body) {
             const computed = getComputedStyle(node)
-            if (computed.paddingTop) {
-              const value = parseFloat(computed.paddingTop) || 0
-              if (value > top) top = value
-            }
-            if (!grid && computed.display === 'grid' && computed.gridTemplateColumns !== 'none') grid = node
+            if (computed.display === 'grid' && computed.gridTemplateColumns !== 'none') return node
             node = node.parentElement
           }
-          return { grid, top }
+          return undefined
+        }
+        const columnOf = (frame, name) => {
+          if (!frame) return undefined
+          for (const child of Array.from(frame.children)) {
+            if (String(child.className || '').indexOf(name) >= 0) return child
+          }
+          return undefined
         }
         const measure = () => {
           raf = 0
           if (!centre) return
-          try {
-            const found = frameOf()
-            const computed = found.grid ? getComputedStyle(found.grid) : undefined
-            const tracks = computed
-              ? computed.gridTemplateColumns
-                  .split(' ')
-                  .map((value) => parseFloat(value))
-                  .filter((value) => Number.isFinite(value))
-              : []
-            const left = tracks[0] || 0
-            const right = tracks.length > 2 ? tracks.slice(2).reduce((sum, value) => sum + value, 0) : 0
-            /* The frame's top padding IS the native titlebar band (its ::before drag strip has
-               exactly that height), so the surface starts below it and the window controls stay
-               uncovered and draggable. 0 on platforms without an overlay titlebar. */
-            centre.style.setProperty('--dsx-left', left + 'px')
-            centre.style.setProperty('--dsx-right', right + 'px')
-            centre.style.setProperty('--dsx-top', found.top + 'px')
-            if (!reported) {
-              reported = true
-              report('geometry', {
-                top: found.top,
-                left,
-                right,
-                tracks: tracks.length,
-                grid: found.grid ? found.grid.className.slice(0, 40) : '(none)',
-              })
-            }
-          } catch {
-            centre.style.setProperty('--dsx-left', '0px')
-            centre.style.setProperty('--dsx-right', '0px')
-            centre.style.setProperty('--dsx-top', '0px')
-          }
+          const frame = gridOf()
+          const offsets = frame ? frameOffsets(frame) : { left: 0, right: 0, top: 0, source: 'none', raw: '' }
+          centre.style.setProperty('--dsx-left', offsets.left + 'px')
+          centre.style.setProperty('--dsx-right', offsets.right + 'px')
+          centre.style.setProperty('--dsx-top', offsets.top + 'px')
+          const key = offsets.left + '|' + offsets.right + '|' + offsets.top + '|' + offsets.source
+          if (key === lastKey) return
+          lastKey = key
+          clearTimeout(reportTimer)
+          reportTimer = setTimeout(() => report('geometry', offsets), 260)
         }
+        /* A track change is animated (grid-template-columns transition), so one rAF sample can
+           land mid-transition and stay stale forever. Re-sample for the whole settle window. */
         const schedule = () => {
           if (raf) return
           raf = requestAnimationFrame(measure)
+          clearTimers()
+          for (const delay of [90, 220, 400, 650]) timers.push(setTimeout(() => { raf = 0; measure() }, delay))
         }
-        frame = centre.parentElement && centre.parentElement.parentElement
-        const observed = frameOf().grid || frame
+        const frame = gridOf()
+        const centreCol = columnOf(frame, 'centerCol')
         measure()
         window.addEventListener('resize', schedule)
-        const observer = observed && typeof MutationObserver === 'function'
-          ? new MutationObserver(schedule)
-          : undefined
-        if (observer) observer.observe(observed, { attributes: true, attributeFilter: ['style', 'class'] })
+        const observer = typeof MutationObserver === 'function' ? new MutationObserver(schedule) : undefined
+        if (observer && frame) observer.observe(frame, { attributes: true, attributeFilter: ['style', 'class'] })
+        /* Entering Chat re-shows the surface without touching the frame: re-measure on our own
+           visibility flip so a stale offset can never survive a mode switch. */
+        const selfObserver = typeof MutationObserver === 'function' ? new MutationObserver(schedule) : undefined
+        if (selfObserver) selfObserver.observe(centre, { attributes: true, attributeFilter: ['data-on'] })
+        const resizer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : undefined
+        if (resizer) {
+          if (frame) resizer.observe(frame)
+          if (centreCol) resizer.observe(centreCol)
+        }
+        const onTransition = () => schedule()
+        if (frame) {
+          frame.addEventListener('transitionrun', onTransition)
+          frame.addEventListener('transitionend', onTransition)
+        }
         return () => {
           window.removeEventListener('resize', schedule)
           if (observer) observer.disconnect()
+          if (selfObserver) selfObserver.disconnect()
+          if (resizer) resizer.disconnect()
+          if (frame) {
+            frame.removeEventListener('transitionrun', onTransition)
+            frame.removeEventListener('transitionend', onTransition)
+          }
+          clearTimers()
+          clearTimeout(reportTimer)
           if (raf) cancelAnimationFrame(raf)
         }
       }, [])
@@ -761,6 +805,8 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      /* Test hook: the pure geometry rule, exercised by test/geometry.test.mjs. */
+      __geometry: frameOffsets,
       apply(ctx) {
         appCtx = ctx
 

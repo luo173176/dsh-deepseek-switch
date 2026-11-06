@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## 0.6.1 — 2026-11-06
+
+The Chat workspace keeps its full width after the Harness side panels open and close.
+
+- **Fixed** the Chat overlay reading the frame's `grid-template-columns` once per change. The app frame animates that property (`transition: grid-template-columns`), so a single `requestAnimationFrame` sample could catch a mid-transition value and keep it forever — the official page then stayed about 600 px wide with a blank band on the right. The overlay now follows the frame's **centre column** by box measurement (`getBoundingClientRect`) instead of parsing track strings, re-samples across the whole 650 ms settle window (`transitionrun` / `transitionend` plus a `ResizeObserver` on the frame and the centre column), and measures again every time the Chat surface is shown. Offsets are clamped to ≥ 0.
+- **Added** `test/geometry.test.mjs` — 5 checks: right panel closed, right panel open (598 px), collapsed sidebar, track fallback when the centre column is absent, non-negative clamp. `npm test` now runs the host half and the geometry rule.
+- **Unchanged** the switcher's position and layout, the login snapshot, and the refresh button.
+
 ## 0.6.0 — 2026-10-21
 
 A profile that registered this package twice no longer breaks plugin updates, and the Chat page can be reloaded without restarting the app.
